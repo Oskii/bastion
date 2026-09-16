@@ -12,6 +12,10 @@ contract BastionFactory is EIP712 {
 
     error InvalidDelegationSig();
     error InvalidSigFormat();
+    error AlreadyUsed();
+    error WrongChainId();
+    error DelegationSigReuse();
+    error OnlyOwner();
 
     using LibRLP for LibRLP.List;
 
@@ -29,16 +33,23 @@ contract BastionFactory is EIP712 {
 
     mapping(address owner => mapping(address session => mapping(address token => uint256))) public allowance;
 
+    mapping(bytes32 digest => bool used) public usedDigest;
+
     function checkSig(Approval memory approval, uint256 _chainId, uint8 v, bytes32 r, bytes32 s) external {
+        require(_chainId == block.chainid, WrongChainId());
         address session = getBastionAddress(_chainId, v, r, s);
         bytes32 digest = getDigest(approval);
-        address signer = ecrecover(digest, v, r, s);
+        address signer = ECDSA.recover(digest, v, r, s);
         require(signer != address(0), InvalidSigFormat());
+        require(signer != session, DelegationSigReuse());
+        require(!usedDigest[digest], AlreadyUsed());
+        usedDigest[digest] = true;
         Bastion(session).initialize(signer, approval.operator);
         allowance[signer][session][approval.token] = approval.amount;
     }
 
     function consume(address _owner, address _token, uint256 _amount) external {
+        require(_owner == Bastion(msg.sender).owner(), OnlyOwner());
         allowance[_owner][msg.sender][_token] -= _amount;
         ERC20(_token).transferFrom(_owner, msg.sender, _amount);
     }
